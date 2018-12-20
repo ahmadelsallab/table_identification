@@ -11,7 +11,7 @@ subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'pillow'])
 subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'intervaltree==2.1.0'])
 
 subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'xmltodict'])
-
+import threading
 import copy
 import json
 import os
@@ -389,13 +389,16 @@ class HocrDocument(object):
                                 current_word_left = word_bbox[0]
                                 w_i, h_i = word_bbox[2] - word_bbox[0], word_bbox[3] - word_bbox[1]
 
-                                if type(word.get("strong")) != str and (word.get("strong") is None or word["strong"].get("em") is None):
-                                    word_text = None
+                                if "#text" in word:
+                                    word_text = word["#text"]
                                 else:
-                                    if type(word.get("strong")) == str:
-                                        word_text = word["strong"]
+                                    if type(word.get("strong")) != str and (word.get("strong") is None or word["strong"].get("em") is None):
+                                        word_text = None
                                     else:
-                                        word_text = word["strong"]["em"]
+                                        if type(word.get("strong")) == str:
+                                            word_text = word["strong"]
+                                        else:
+                                            word_text = word["strong"]["em"]
 
                                 if word_text is None:  # none word
                                     if w_i > h_i * 3:  # row
@@ -448,7 +451,7 @@ class HocrDocument(object):
         print("Downloading original pickle from localizer...")
         download_file(s3, json_input["bucket"], os.path.split(json_input['file_name'])[1], json_input["file_name"])
 
-        localization_output = unpickle(os.path.split(json_input['file_name'])[1])
+        localization_output = unpickle(os.path.split(json_input['file_name'])[1]) #
         localization_bboxes = list(map(lambda item: item[1], localization_output))
 
         for i, (x1_loc_i, y1_loc_i, w_loc_i, h_loc_i) in enumerate(localization_bboxes):
@@ -1030,8 +1033,8 @@ class TableDetector:
                     reject = pd_table.shape == (1, 1) or number_of_texts > 2 * pd_table.shape[0] * pd_table.shape[1] or 2 * number_of_texts < pd_table.shape[0] * pd_table.shape[1] or cols[-1] - cols[0] < .5 * page["width"]
                     if not reject:
                         with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-                            print(len(candidate_hors) + len(candidate_vert) + len(candidate_empt), len(candidate_statements))
-                            print(pd_table, pd_table.shape)
+                            # print(len(candidate_hors) + len(candidate_vert) + len(candidate_empt), len(candidate_statements))
+                            # print(pd_table, pd_table.shape)
                             if str(pd_table) not in all_tables:
                                 self.tables_df.append(pd_table)
                                 self.tables.append({"col_positions": cols, "table_start": rows[0], "table_end": rows[-1], "modified_left": cols[0], "modified_top": rows[0], "modified_right": cols[-1], "modified_bottom": rows[-1]})
@@ -1183,6 +1186,8 @@ class TableDetector:
 
         self.tables_df = []
         tables_with_text = []
+        all_tables = set()
+
         for table_index, table in enumerate(self.tables):
 
             table['col_positions'] = sorted(table['col_positions'])
@@ -1214,7 +1219,7 @@ class TableDetector:
                     left_i, right_i, top_i, bottom_i, width_i, height_i = int(vert["left"]), int(vert["right"]), int(vert["top"]), int(vert["bottom"]), vert["width"], vert["height"]
                     vert_bbox = np.array([[left_i, top_i], [right_i, bottom_i]])
 
-                    if rectintersect(table_bbox, vert_bbox) > .31 and height_i > .15 * table_height:
+                    if rectintersect(table_bbox, vert_bbox) > .31 and height_i > .05 * page["height"]:
                         initial_cols.append((top_i, bottom_i, (left_i + right_i) / 2))
 
                 if initial_cols and initial_rows:
@@ -1236,7 +1241,7 @@ class TableDetector:
                         left_i, right_i, top_i, bottom_i, width_i, height_i = int(vert["left"]), int(vert["right"]), int(vert["top"]), int(vert["bottom"]), vert["width"], vert["height"]
                         vert_bbox = np.array([[left_i, top_i], [right_i, bottom_i]])
 
-                        if rectintersect(table_bbox, vert_bbox) > .31 and height_i > .15 * table_height:
+                        if rectintersect(table_bbox, vert_bbox) > .31 and height_i > .05 * page["height"]:
                             cols.append((top_i, bottom_i, (left_i + right_i) / 2))
 
                     for word in page["words"]:
@@ -1310,9 +1315,10 @@ class TableDetector:
 
                         df.columns = new_names
 
-                        if self.post_process_tables(df.copy()):
+                        if self.post_process_tables(df.copy()) and str(df) not in all_tables:
                             self.tables_df.append(df)
                             tables_with_text.append(table)
+                            all_tables.add(str(df))
                             print("Table detected:", table_index, "with shape", df.shape)
 
                     # print(df, "\n", self.post_process_tables(df.copy()))
@@ -1457,8 +1463,11 @@ def download_file(s3, bucket, local_path_to_file, s3_path_to_file):
 
 
 def unpickle(path_to_file):
-    with open(path_to_file, 'rb') as f:
+    with open(path_to_file, 'rb') as f:  #
         data = pickle.load(f)
+
+    cleaner = threading.Thread(target=lambda: os.remove(path_to_file))
+    cleaner.start()
     return data
 
 
@@ -1540,14 +1549,14 @@ def transform_fn(none_model, data, input_content_type, output_content_type):
     image_file_stream = s3.Object(bucket_name=bucket, key=image_file_name_s3)
 
     temp_hocr_file_name = id_generator() + ".hocr"
-    with open(temp_hocr_file_name, 'wb') as f:
+    with open(temp_hocr_file_name, 'wb') as f:  #
         f.write(hocr_file_stream.get()["Body"].read())
 
     temp_image_file_name = os.path.split(image_file_name_s3)[1]
-    with open(temp_image_file_name, 'wb') as f:
+    with open(temp_image_file_name, 'wb') as f:  #
         f.write(image_file_stream.get()["Body"].read())
 
-    # communicating with endpoints
+        # communicating with endpoints
     s3 = boto3.resource('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
     session = boto3.Session(region_name='us-west-2', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
     sagemaker_session = sagemaker.Session(boto_session=session)
@@ -1573,7 +1582,7 @@ def transform_fn(none_model, data, input_content_type, output_content_type):
 
     cv2.imwrite(small_image_name, img_for_predictors)
 
-    upload_file(s3, bucket, open(small_image_name, "rb"), small_image_path_s3)
+    upload_file(s3, bucket, open(small_image_name, "rb"), small_image_path_s3)  #
 
     print("Calling localizer..")
 
@@ -1583,7 +1592,6 @@ def transform_fn(none_model, data, input_content_type, output_content_type):
         loc_data = {"url": "s3://{}/{}".format(bucket, small_image_path_s3)}
     else:
         loc_data = {'bucket': bucket, 'file_name': small_image_path_s3}
-
 
     loc_out = loc_predictor.predict(loc_data)
 
@@ -1608,7 +1616,17 @@ def transform_fn(none_model, data, input_content_type, output_content_type):
 
     print("Calling Handprinting OCR...")
     repository.add_from_deployed(list(pages.keys())[0], hp_data, hp_predictor, is_new_api=hp_endpoint_new_api)
+
     #########################################################
+
+    def clean_files():
+        os.remove(small_image_name)
+        os.remove(temp_hocr_file_name)
+        os.remove(temp_image_file_name)
+
+    hw_thread = threading.Thread(target=clean_files)
+    hw_thread.start()
+
     # import threading
     # print("Calling Handwriting OCR...")
     # hw_thread = threading.Thread(target=lambda: repository.add_from_deployed(list(pages.keys())[0], hw_data, hw_predictor))
@@ -1646,5 +1664,6 @@ def transform_fn(none_model, data, input_content_type, output_content_type):
         list_of_json_tables = [json.loads(df_res.to_json())]
         response_body = json.dumps({"data": list_of_json_tables})
 
+    print(os.popen("df . -m").read())
     return response_body, output_content_type
 

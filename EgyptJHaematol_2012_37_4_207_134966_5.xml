@@ -1,86 +1,85 @@
-                                  
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
-                                                   
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pdf2xml SYSTEM "pdf2xml.dtd">
+
+<pdf2xml producer="poppler" version="0.62.0">
+<page number="1" position="absolute" top="0" left="0" height="275" width="288">
+	<fontspec id="0" size="5" family="Times" color="#000000"/>
+	<fontspec id="1" size="10" family="Times" color="#000000"/>
+	<fontspec id="2" size="-1" family="Times" color="#000000"/>
+	<fontspec id="3" size="7" family="Times" color="#000000"/>
+<image top="0" left="0" width="288" height="276" src="EgyptJHaematol_2012_37_4_207_134966_5-1_1.jpg"/>
+<text top="6" left="114" width="28" height="8" font="0">Patients</text>
+<text top="8" left="78" width="209" height="12" font="1"> </text>
+<text top="38" left="1" width="287" height="2" font="2"> </text>
+<text top="4" left="227" width="30" height="9" font="3">Controls</text>
+<text top="26" left="1" width="40" height="8" font="0">Parameters</text>
+<text top="26" left="87" width="36" height="8" font="0">IQR/n (%)</text>
+<text top="26" left="152" width="26" height="8" font="0">Median</text>
+<text top="26" left="213" width="14" height="8" font="0">IQR</text>
+<text top="26" left="262" width="25" height="8" font="0">Median</text>
+<text top="43" left="0" width="50" height="8" font="0">TLC (x 10°/I)</text>
+<text top="43" left="91" width="29" height="8" font="0">40-77.8</text>
+<text top="43" left="159" width="16" height="8" font="0">60.0</text>
+<text top="43" left="206" width="26" height="8" font="0">5.0-8.1</text>
+<text top="43" left="274" width="11" height="8" font="0">6.5</text>
+<text top="52" left="1" width="31" height="9" font="3">Hb (g/dl)</text>
+<text top="52" left="90" width="31" height="9" font="3">7.9-12.0</text>
+<text top="52" left="159" width="15" height="9" font="3">10.7</text>
+<text top="52" left="202" width="37" height="9" font="3">12.4-13.3</text>
+<text top="52" left="270" width="15" height="9" font="3">12.9</text>
+<text top="64" left="1" width="48" height="8" font="0">PLT ( x 10°!)</text>
+<text top="64" left="92" width="28" height="8" font="0">63-174</text>
+<text top="64" left="154" width="20" height="8" font="0">133.5</text>
+<text top="64" left="197" width="46" height="8" font="0">181.3-271.5</text>
+<text top="64" left="265" width="21" height="8" font="0">231.5</text>
+<text top="74" left="1" width="58" height="8" font="0">PB lymphocytes</text>
+<text top="74" left="90" width="31" height="8" font="0">60-85%</text>
+<text top="74" left="159" width="15" height="8" font="0">70.0</text>
+<text top="74" left="204" width="31" height="8" font="0">20-35%</text>
+<text top="74" left="269" width="16" height="8" font="0">24.0</text>
+<text top="84" left="1" width="59" height="8" font="0">BM lymphocytes</text>
+<text top="84" left="90" width="31" height="8" font="0">70-85%</text>
+<text top="84" left="159" width="16" height="8" font="0">80.0</text>
+<text top="84" left="217" width="4" height="8" font="0">-</text>
+<text top="84" left="273" width="4" height="8" font="0">_</text>
+<text top="95" left="0" width="22" height="8" font="0">CD13</text>
+<text top="95" left="88" width="35" height="8" font="0">3.7-9.6%</text>
+<text top="95" left="164" width="10" height="8" font="0">7.2</text>
+<text top="95" left="202" width="35" height="8" font="0">3.9-6.7%</text>
+<text top="95" left="274" width="11" height="8" font="0">5.2</text>
+<text top="105" left="84" width="42" height="8" font="0">3/30 (10%)</text>
+<text top="114" left="0" width="26" height="9" font="3">CD11b</text>
+<text top="114" left="79" width="35" height="9" font="3">0.7-4.0%</text>
+<text top="114" left="164" width="11" height="9" font="3">25</text>
+<text top="114" left="202" width="35" height="9" font="3">0.9-3.0%</text>
+<text top="114" left="275" width="10" height="9" font="3">1.7</text>
+<text top="125" left="84" width="49" height="8" font="0">4/30 (13.3%)</text>
+<text top="135" left="0" width="22" height="8" font="0">CD38</text>
+<text top="135" left="79" width="39" height="8" font="0">7.6-44.2%</text>
+<text top="135" left="159" width="15" height="8" font="0">10.0</text>
+<text top="135" left="217" width="4" height="8" font="0">_</text>
+<text top="135" left="273" width="4" height="8" font="0">-</text>
+<text top="145" left="79" width="53" height="8" font="0">13/30 (43.3%)</text>
+<text top="156" left="1" width="22" height="8" font="0">FMC7</text>
+<text top="156" left="79" width="45" height="8" font="0">11.8-40.6%</text>
+<text top="156" left="159" width="15" height="8" font="0">14.6</text>
+<text top="156" left="217" width="4" height="8" font="0">a</text>
+<text top="156" left="273" width="4" height="8" font="0">i</text>
+<text top="176" left="0" width="57" height="8" font="0">Trephine biopsy</text>
+<text top="185" left="9" width="18" height="9" font="3">Focal</text>
+<text top="196" left="9" width="24" height="8" font="0">Diffuse</text>
+<text top="207" left="1" width="41" height="8" font="0">Karyotyping</text>
+<text top="215" left="10" width="24" height="9" font="3">13qdel</text>
+<text top="227" left="9" width="24" height="8" font="0">11qdel</text>
+<text top="237" left="9" width="39" height="8" font="0">Trisomy 12</text>
+<text top="166" left="79" width="53" height="8" font="0">11/30 (36.6%)</text>
+<text top="186" left="80" width="53" height="8" font="0">16/27 (59.2%)</text>
+<text top="196" left="79" width="53" height="8" font="0">11/27 (40.7%)</text>
+<text top="217" left="80" width="46" height="8" font="0">11/20 (55%)</text>
+<text top="227" left="84" width="42" height="8" font="0">4/20 (20%)</text>
+<text top="237" left="84" width="42" height="8" font="0">5/20 (25%)</text>
+<text top="253" left="1" width="287" height="2" font="2"> </text>
+<text top="257" left="1" width="287" height="8" font="0">BM, bone marrow; del, deletion; Hb, hemoglobin; IQR, interquartile range;</text>
+<text top="267" left="1" width="229" height="8" font="0">PB, peripheral blood; PLT,platelets; TLC, total leukocytic count.</text>
+</page>
+</pdf2xml>
