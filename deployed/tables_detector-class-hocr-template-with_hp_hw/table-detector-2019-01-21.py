@@ -1719,7 +1719,7 @@ Defaults
 "hp_endpoint_new_api": False
 
 # access keys
-'
+"aws_access_key_id": 's'
 "aws_secret_access_key": 's'
 """
 
