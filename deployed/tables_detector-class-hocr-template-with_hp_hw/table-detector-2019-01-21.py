@@ -1719,8 +1719,8 @@ Defaults
 "hp_endpoint_new_api": False
 
 # access keys
-"aws_access_key_id": 's'
-"aws_secret_access_key": 's'
+"aws_access_key_id": '"removed"'
+"aws_secret_access_key": '"removed"'
 """
 
 print(json.dumps(json.loads(transform_fn(None,
@@ -1733,3 +1733,6 @@ print(json.dumps(json.loads(transform_fn(None,
                                               }
                                          )
                                          , None, None)[0]), sort_keys=True, indent=4))
+
+ s3 = boto3.resource('s3', aws_access_key_id=' ', aws_secret_access_key='')
+    image_file_stream = s3.Object(bucket_name=source_bucket, key=source_image)
