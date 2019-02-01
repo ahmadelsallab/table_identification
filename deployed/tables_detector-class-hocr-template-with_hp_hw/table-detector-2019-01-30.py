@@ -1,8 +1,21 @@
+import subprocess
+import sys
+
+subprocess.call([sys.executable, '-m', 'pip', 'install', 'sagemaker==1.13.0'])
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'opencv-python'])
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'pdftabextract'])
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'tabula-py'])
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'lxml'])
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'pillow'])
+
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'intervaltree==2.1.0'])
+
+subprocess.call([sys.executable, '-m', 'pip', 'install', '-U', 'xmltodict'])
+import threading
 import copy
 import json
 import os
 import pickle
-import random
 import re
 import traceback
 from collections import OrderedDict, defaultdict
@@ -428,6 +441,116 @@ class HocrDocument(object):
                 self.hierarchy = pages_h
         return self.hierarchy
 
+    def add_from_deployed(self, page_id, json_input, predictor, is_new_api=False):
+        # map tesseract space into localizer space
+        self.parse()
+        inputs_indexes_for_predictor = []  # here I save reference to words I update from predictor
+        inputs_for_predictor = []
+
+        is_HP = os.path.split(json_input['file_name'])[1].split(".")[0] == 'hand_printed'
+        print("Downloading original pickle from localizer...")
+        download_file(s3, json_input["bucket"], os.path.split(json_input['file_name'])[1], json_input["file_name"])
+
+        localization_output = unpickle(os.path.split(json_input['file_name'])[1])  #
+        localization_bboxes = list(map(lambda item: item[1], localization_output))
+
+        for i, (x1_loc_i, y1_loc_i, w_loc_i, h_loc_i) in enumerate(localization_bboxes):
+            x2_loc_i, y2_loc_i = x1_loc_i + w_loc_i, y1_loc_i + h_loc_i
+            x1_loc_i, y1_loc_i, x2_loc_i, y2_loc_i = float(x1_loc_i), float(y1_loc_i), float(x2_loc_i), float(y2_loc_i)
+
+            loc_bbox = np.array([[x1_loc_i, y1_loc_i], [x2_loc_i, y2_loc_i]])
+            localization_found = False
+            for words_index, word in enumerate(self.parse_data[page_id]["words"]):
+                tesseract_bbox = np.array(
+                    [[get_in_hor_loc_space(word["left"]), get_in_vert_loc_space(word["top"])],
+                     [get_in_hor_loc_space(word["right"]), get_in_vert_loc_space(word["bottom"])]])
+
+                if rectintersect(loc_bbox, tesseract_bbox) > .8 and word["height"] > 50 and word["width"] > 50:  # mostly, localization boxes are larger than needed
+                    word["type"] = "HP" if is_HP else "HW"  # add it
+                    inputs_indexes_for_predictor.append(words_index)
+                    localization_found = True
+
+            if not localization_found:
+                # this must be in tesseract word space !!!!!!!!!!
+                x1_loc_in_tess_i, y1_loc_in_tess_i, x2_loc_in_tess_i, y2_loc_in_tess_i = \
+                    get_in_hor_tess_space(x1_loc_i), get_in_vert_tess_space(y1_loc_i), get_in_hor_tess_space(x2_loc_i), get_in_vert_tess_space(y2_loc_i)
+
+                word = {"width": x2_loc_in_tess_i - x1_loc_in_tess_i,
+                        "height": y2_loc_in_tess_i - y1_loc_in_tess_i,
+                        "value": "tttt",
+                        "top": y1_loc_in_tess_i,
+                        "left": x1_loc_in_tess_i,
+                        "bottom": y2_loc_in_tess_i,
+                        "right": x2_loc_in_tess_i,
+                        "topleft": np.array([x1_loc_in_tess_i, y1_loc_in_tess_i]),
+                        "bottomleft": np.array([x1_loc_in_tess_i, y2_loc_in_tess_i]),
+                        "topright": np.array([x2_loc_in_tess_i, y1_loc_in_tess_i]),
+                        "bottomright": np.array([x2_loc_in_tess_i, y2_loc_in_tess_i]),
+                        "line_code": (0, 0),
+                        "type": "HP" if is_HP else "HW",
+                        "confidence": .3
+                        }
+                if word["height"] > 50 and word["width"] > 50:
+                    self.parse_data[page_id]["words"].append(word)
+                    inputs_indexes_for_predictor.append(len(self.parse_data[page_id]["words"]) - 1)
+
+        inputs_indexes_for_predictor = list(set(inputs_indexes_for_predictor))
+        for input_index_for_predictor in inputs_indexes_for_predictor:
+            # this must be in localization space !!!!!!!!!!
+            input_words_for_predictor = self.parse_data[page_id]["words"][input_index_for_predictor]
+            x_1, y_1, x_2, y_2 = input_words_for_predictor["left"], input_words_for_predictor["top"], input_words_for_predictor["right"], input_words_for_predictor["bottom"]
+            x_1, y_1, x_2, y_2 = get_in_hor_loc_space(x_1), get_in_vert_loc_space(y_1), get_in_hor_loc_space(x_2), get_in_vert_loc_space(y_2)
+            x_1, y_1, x_2, y_2 = int(x_1), int(y_1), int(x_2), int(y_2)
+
+            inputs_for_predictor.append((img_for_predictors[y_1:y_2, x_1:x_2].tolist(), (x_1, y_1, x_2 - x_1, y_2 - y_1)))
+
+        if is_new_api:
+            new_inputs_for_predictor = []
+            for image, bb in inputs_for_predictor:
+                new_inputs_for_predictor.append({"bbox": {"left": bb[0], "top": bb[1], "height": bb[3], "width": bb[2]}, "lines": [image]})
+            inputs_for_predictor = new_inputs_for_predictor
+
+        print("Uploading refined pickle pickle from localizer to {}..".format(json_input["file_name"]))
+        upload_file(s3, json_input["bucket"], pickle.dumps(inputs_for_predictor, protocol=2), json_input["file_name"])
+
+        print("Calling the predictor..")
+        try:
+            json_predictions = predictor.predict(json_input)
+        except Exception as ex:
+            raise Exception()
+        json_predictions = json_predictions["result"]
+        print(json_predictions)
+
+        if is_new_api:
+            new_json_predictions = []
+            for json_prediction in json_predictions:
+                print("helloo")
+                new_json_predictions.append({'text': json_prediction["lines"][0]["text"], 'score': json_prediction["lines"][0]["score"], 'type of text': json_prediction["lines"][0]["type of text"], 'y': json_prediction["bbox"]["top"], 'w': json_prediction["bbox"]['width'], 'x': json_prediction["bbox"]["left"], 'h': json_prediction["bbox"]["height"]})
+            json_predictions = new_json_predictions
+        for i, json_prediction in enumerate(json_predictions):
+            word_index = inputs_indexes_for_predictor[i]
+            x1_i, y1_i, x2_i, y2_i = get_in_hor_tess_space(json_prediction["x"]), get_in_vert_tess_space(json_prediction["y"]), \
+                                     get_in_hor_tess_space(json_prediction["x"] + json_prediction["w"]), get_in_vert_tess_space(json_prediction["y"] + json_prediction["h"])
+
+            x1_i, y1_i, x2_i, y2_i = float(x1_i), float(y1_i), float(x2_i), float(y2_i)
+            # if json_prediction["score"] > .3:
+            self.parse_data[page_id]["words"][word_index] = {"width": x2_i - x1_i,
+                                                             "height": y2_i - y1_i,
+                                                             "value": json_prediction["text"],
+                                                             "top": y1_i,
+                                                             "left": x1_i,
+                                                             "bottom": y2_i,
+                                                             "right": x2_i,
+                                                             "topleft": np.array([x1_i, y1_i]),
+                                                             "bottomleft": np.array([x1_i, y2_i]),
+                                                             "topright": np.array([x2_i, y1_i]),
+                                                             "bottomright": np.array([x2_i, y2_i]),
+                                                             "line_code": (0, 0),
+                                                             "type": json_prediction["type of text"],
+                                                             "confidence": json_prediction["score"]
+                                                             }
+        print("Done:Added data from predictor..")
+
     def write_equivalent_xml(self):
         HEADER = """<?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE pdf2xml SYSTEM "pdf2xml.dtd">
@@ -787,10 +910,10 @@ class TableDetector:
                 tables_img[table_start:table_end, col - line_width:col + line_width] = 0
             # Left boundary
             tables_img[table_start:table_end, last_col - line_width:last_col + line_width] = 0
-        import matplotlib.pyplot as plt
-        plt.imshow(tables_img, cmap='gray')
-        # plt.imsave(file_name + '_table.jpg', tables_img, cmap='gray')
-        plt.show()
+        # import matplotlib.pyplot as plt
+        # plt.imshow(tables_img, cmap='gray')
+        # # plt.imsave(file_name + '_table.jpg', tables_img, cmap='gray')
+        # plt.show()
 
     def layout_based_borderless_detection(self):
 
@@ -915,49 +1038,41 @@ class TableDetector:
                     reject = pd_table.shape == (1, 1) or number_of_texts > 2 * pd_table.shape[0] * pd_table.shape[1] or 2 * number_of_texts < pd_table.shape[0] * pd_table.shape[1] or cols[-1] - cols[0] < .5 * page["width"]
                     if not reject:
                         with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-                            print(len(candidate_hors) + len(candidate_vert) + len(candidate_empt), len(candidate_statements))
-                            print(pd_table, pd_table.shape)
+                            # print(len(candidate_hors) + len(candidate_vert) + len(candidate_empt), len(candidate_statements))
+                            # print(pd_table, pd_table.shape)
                             if str(pd_table) not in all_tables:
                                 self.tables_df.append(pd_table)
                                 self.tables.append({"col_positions": cols, "table_start": rows[0], "table_end": rows[-1], "modified_left": cols[0], "modified_top": rows[0], "modified_right": cols[-1], "modified_bottom": rows[-1]})
                                 all_tables.add(str(pd_table))
-                                #######################################
-                                img_orig_local = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2BGR)
-                                for candidate in candidate_statements:
-                                    sent = page["sentences"][candidate]
-                                    cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 0), 6)
-                                    cv2.rectangle(img_orig_borderless, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 0), 6)
-
-                                for candidate in candidate_vert:
-                                    sent = page["vert_lines"][candidate]
-                                    cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (0, 255, 0), 6)
-                                    cv2.rectangle(img_orig_borderless, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 0), 6)
-
-                                for candidate in candidate_hors:
-                                    sent = page["hor_lines"][candidate]
-                                    cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (0, 0, 255), 6)
-                                    cv2.rectangle(img_orig_borderless, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 0), 6)
-
-                                for candidate in candidate_empt:
-                                    sent = page["empty"][candidate]
-                                    cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 255), 6)
-                                    cv2.rectangle(img_orig_borderless, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 0), 6)
-
-                                print(candidate_vert, candidate_hors, candidate_empt)
-                                for row in rows:
-                                    cv2.line(img_orig_local, (x1, row), (x2, row), (0, 0, 128), 15)
-                                    cv2.line(img_orig_borderless, (x1, row), (x2, row), (0, 0, 128), 15)
-                                for col in cols:
-                                    cv2.line(img_orig_local, (col, y1), (col, y2), (0, 0, 128), 15)
-                                    cv2.line(img_orig_borderless, (col, y1), (col, y2), (0, 0, 128), 15)
-
-                                cv2.namedWindow("table", cv2.WINDOW_NORMAL)
-                                cv2.imshow("table", img_orig_local[y1:y2, x1:x2])
-                                cv2.waitKey()
-
-                                #######################################
-        print("saved to :{}.jpg".format(os.path.split(hocr_file_name)[1].split(".")[0]))
-        cv2.imwrite("{}.jpg".format(os.path.split(hocr_file_name)[1].split(".")[0]), img_orig_borderless)
+                                # #######################################
+                                # img_orig_local = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2BGR)
+                                # for candidate in candidate_statements:
+                                #     sent = page["sentences"][candidate]
+                                #     cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 0), 6)
+                                #
+                                # for candidate in candidate_vert:
+                                #     sent = page["vert_lines"][candidate]
+                                #     cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (0, 255, 0), 6)
+                                #
+                                # for candidate in candidate_hors:
+                                #     sent = page["hor_lines"][candidate]
+                                #     cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (0, 0, 255), 6)
+                                #
+                                # for candidate in candidate_empt:
+                                #     sent = page["empty"][candidate]
+                                #     cv2.rectangle(img_orig_local, (sent["left"], sent["top"]), (sent["right"], sent["bottom"]), (255, 0, 255), 6)
+                                #
+                                # print(candidate_vert, candidate_hors, candidate_empt)
+                                # for row in rows:
+                                #     cv2.line(img_orig_local, (x1, row), (x2, row), (0, 0, 128), 15)
+                                # for col in cols:
+                                #     cv2.line(img_orig_local, (col, y1), (col, y2), (0, 0, 128), 15)
+                                #
+                                # cv2.namedWindow("table", cv2.WINDOW_NORMAL)
+                                # cv2.imshow("table", img_orig_local[y1:y2, x1:x2])
+                                # cv2.waitKey()
+                                #
+                                # #######################################
 
     # def line_based_detection(self):
     #     # get_vertical_separators
@@ -1112,27 +1227,12 @@ class TableDetector:
                     if rectintersect(table_bbox, vert_bbox) > .31 and height_i > .05 * page["height"]:
                         initial_cols.append((top_i, bottom_i, (left_i + right_i) / 2))
 
-                # if table_index==2:
-                # ###################################
-                # print(table_index)
-                # cv2.namedWindow("original", cv2.WINDOW_NORMAL)
-                # cv2.imshow("original", img_orig_words[table_top:table_bottom, table_left:table_right])
-                # cv2.waitKey()
-                # ##################################
-
                 if initial_cols and initial_rows:
                     table["modified_top"] = modified_top = int(np.min(list(map(lambda item: item[0], initial_cols))))
                     table["modified_bottom"] = modified_bottom = int(np.max(list(map(lambda item: item[1], initial_cols))))
                     table["modified_left"] = modified_left = int(np.min(list(map(lambda item: item[0], initial_rows))))
                     table["modified_right"] = modified_right = int(np.max(list(map(lambda item: item[1], initial_rows))))
                     table_bbox = np.array([[modified_left, modified_top], [modified_right, modified_bottom]])
-
-                    # ###################################
-                    # print(table_index)
-                    # cv2.namedWindow("original", cv2.WINDOW_NORMAL)
-                    # cv2.imshow("original", img_orig_words[modified_top:modified_bottom, modified_left:modified_right])
-                    # cv2.waitKey()
-                    # ##################################
 
                     cols, rows = [], []
                     for hor in page['hor_lines']:
@@ -1174,19 +1274,6 @@ class TableDetector:
                             rows_new[-1] = (rows[i] + rows[i - 1]) // 2
                     rows = rows_new
 
-                    # ######################################
-                    # cv2.namedWindow("original", cv2.WINDOW_NORMAL)
-                    # cv2.namedWindow("modified", cv2.WINDOW_NORMAL)
-                    # for row in rows:
-                    #     cv2.line(img_orig_words, (modified_left, row), (modified_right, row), (0, 0, 128), 15)
-                    # for col in cols:
-                    #     cv2.line(img_orig_words, (col, modified_top), (col, modified_bottom), (0, 0, 128), 15)
-                    # cv2.imshow("original", img_orig_words[table_top:table_bottom, table_left:table_right])
-                    # cv2.imshow("modified", img_orig_words[modified_top:modified_bottom, modified_left:modified_right])
-                    #
-                    # cv2.waitKey()
-                    # #####################################
-
                     if modified_top < min(rows) and min(rows) - modified_top > table_height * .1:
                         rows = [modified_top] + rows
                     if max(rows) < modified_bottom and modified_bottom - max(rows) > table_height * .1:
@@ -1197,19 +1284,6 @@ class TableDetector:
                     if max(cols) < modified_right and modified_right - max(cols) > table_width * .1:
                         cols = cols + [modified_right]
 
-                    # #####################################
-                    #
-                    # cv2.namedWindow("original", cv2.WINDOW_NORMAL)
-                    # cv2.namedWindow("modified", cv2.WINDOW_NORMAL)
-                    # for row in rows:
-                    #     cv2.line(img_orig_words, (modified_left, row), (modified_right, row), (0, 0, 128), 15)
-                    # for col in cols:
-                    #     cv2.line(img_orig_words, (col, modified_top), (col, modified_bottom), (0, 0, 128), 15)
-                    # cv2.imshow("original", img_orig_words[table_top:table_bottom, table_left:table_right])
-                    # cv2.imshow("modified", img_orig_words[modified_top:modified_bottom, modified_left:modified_right])
-                    #
-                    # cv2.waitKey()
-                    # ####################################
                     if len(cols) > 2 and len(rows) > 2:
                         cells = make_grid_from_positions(cols, rows)
 
@@ -1251,23 +1325,6 @@ class TableDetector:
                             tables_with_text.append(table)
                             all_tables.add(str(df))
                             print("Table detected:", table_index, "with shape", df.shape)
-                            ######################################
-
-                            with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-                                print(df)
-
-                            cv2.namedWindow("original", cv2.WINDOW_NORMAL)
-                            cv2.namedWindow("modified", cv2.WINDOW_NORMAL)
-                            cv2.namedWindow("modified")
-                            for row in rows:
-                                cv2.line(img_orig_words, (modified_left, row), (modified_right, row), (0, 0, 128), 15)
-                            for col in cols:
-                                cv2.line(img_orig_words, (col, modified_top), (col, modified_bottom), (0, 0, 128), 15)
-                            cv2.imshow("original", img_orig_words[table_top:table_bottom, table_left:table_right])
-                            cv2.imshow("modified", img_orig_words[modified_top:modified_bottom, modified_left:modified_right])
-
-                            cv2.waitKey()
-                            #####################################
 
                     # print(df, "\n", self.post_process_tables(df.copy()))
                     # print("> page: grid with %d rows, %d columns" % (n_rows, n_cols))
@@ -1411,8 +1468,11 @@ def download_file(s3, bucket, local_path_to_file, s3_path_to_file):
 
 
 def unpickle(path_to_file):
-    with open(path_to_file, 'rb') as f:
+    with open(path_to_file, 'rb') as f:  #
         data = pickle.load(f)
+
+    cleaner = threading.Thread(target=lambda: os.remove(path_to_file))
+    cleaner.start()
     return data
 
 
@@ -1437,6 +1497,14 @@ def intervalize(sum_on_dim, thresh, shift):
     return list(map(lambda item: shift + (item[1] + item[0]) // 2, filter(lambda item: (item[1] - item[0]) > thresh, intervals)))
 
 
+import string
+import random
+
+
+def id_generator(size=12, chars=string.ascii_uppercase + string.digits):
+    return ''.join(random.choice(chars) for _ in range(size))
+
+
 # Initialize handwriting model
 class JSONPredictor(RealTimePredictor):
     def __init__(self, endpoint_name, sagemaker_session):
@@ -1454,296 +1522,180 @@ def model_fn(model_dir):
 def transform_fn(none_model, data, input_content_type, output_content_type):
     global page_scaling_vert, tess_scaling_vert, img_orig, page_scaling_hor, tess_scaling_hor, page, page_h, s3, img_for_predictors
     print("Getting Your files...")
+    ######################################################
+    # getting the data from s3
+    parsed = json.loads(data)
+    bucket = parsed['bucket']
+    hocr_file_name = parsed['hocr_file']
+    image_file_name_s3 = parsed['image_file']
+
+    # endpoints
+
+    loc_endpoint = parsed.get("loc_endpoint", "localization-model-2019-01-29")
+
+    hw_endpoint = parsed.get("hw_endpoint", "pytorch-handwriting-ocr-2019-01-29-02-06-44-538")
+    hp_endpoint = parsed.get("hp_endpoint", "hand-printed-model-2019-01-29-1")
+
+    hw_endpoint_model = parsed.get("hw_endpoint_model", 'new')
+    hp_endpoint_model = parsed.get("hp_endpoint_model", 'new')
+
+    hw_endpoint_new_api = parsed.get("hw_endpoint_new_api", True)
+    hp_endpoint_new_api = parsed.get("hp_endpoint_new_api", False)
+
+    is_new_localizer = parsed.get("is_new_localizer", True)
+
+    # access keys
+    aws_access_key_id = parsed.get("aws_access_key_id", None)
+    aws_secret_access_key = parsed.get("aws_secret_access_key", None)
 
     # getting data
-    global hocr_file_name
-    bucket = 'unum-files'
-    file_name = 'Accident Claim - 2_3.tiff'
 
-    """ OBSERVATIONS
-    pdf/image > convert > large image > tesseract > compress > upload > use localizer/table detector ..
-    repeating convert won't make any problem
-    """
-    tests = []
-    ##
-    iden = 0
-    hocr_file_name = "image1.hocr"
-    image_file_name = "pre_image1.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "image5.hocr"
-    image_file_name = "pre_image5.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "pre_image1-imageinput-sandwich.hocr"  # missing column
-    image_file_name = "pre_image1-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "pre_image2-imageinput-sandwich.hocr"  # missing column
-    image_file_name = "pre_image2-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "pre_image3-imageinput-sandwich.hocr"  # missing column
-    image_file_name = "pre_image3-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "pre_image4-imageinput-sandwich.hocr"
-    image_file_name = "pre_image4-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # # iden = 1
-    hocr_file_name = "pre_image5-imageinput-sandwich.hocr"  # missing column
-    image_file_name = "pre_image5-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "pre_image5--imageinput-sandwich.hocr"
-    image_file_name = "pre_image5--magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # ======================================================================================
-    # # some handwriting
-    hocr_file_name = "Accident-Handwritten_V3-sandwich-2t.hocr"
-    image_file_name = "Accident-Handwritten_V3_2.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "s2/96be1cf1-b5e9-40c6-bfa8-58164e341e09$4.hocr"  # missing column
-    image_file_name = "s2/96be1cf1-b5e9-40c6-bfa8-58164e341e09$4.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "s2/Accident Claim - 5-pdfinput-sandwich-3.hocr"
-    image_file_name = "s2/Accident Claim - 5_3.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "s2/Accident Claim - 6-pdfinput-sandwich-3.hocr"
-    image_file_name = "s2/Accident Claim - 6_3.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "s2/Image.hocr"
-    image_file_name = "s2/Accident Claim - 8.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "s2/Accident Claim - 8-pdfinput-sandwich-3.hocr"  # ........
-    image_file_name = "s2/Accident Claim - 8_3.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    hocr_file_name = "s2/Accident Claim - 7-pdfinput-sandwich-3.hocr"  # very bad document
-    image_file_name = "s2/Accident Claim - 7_3.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # ======================================================================================
-    # # all handwriting
-    hocr_file_name = "Accident Claim - 2-pdfinput-sandwich-3.hocr"
-    image_file_name = "Accident Claim - 2_3.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # # again
-    hocr_file_name = "Accident Claim - 2_3-imageinput-sandwich.hocr"
-    image_file_name = "Accident Claim - 2_3-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # ======================================================================================
-    # # all printed
-    hocr_file_name = "page1.hocr"  # ....
-    image_file_name = "Page 1.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # iden = 0
+    s3 = boto3.resource('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)  # new key
+    hocr_file_stream = s3.Object(bucket_name=bucket, key=hocr_file_name)
+    image_file_stream = s3.Object(bucket_name=bucket, key=image_file_name_s3)
+
+    temp_hocr_file_name = id_generator() + ".hocr"
+    with open(temp_hocr_file_name, 'wb') as f:  #
+        f.write(hocr_file_stream.get()["Body"].read())
+
+    temp_image_file_name = os.path.split(image_file_name_s3)[1]
+    with open(temp_image_file_name, 'wb') as f:  #
+        f.write(image_file_stream.get()["Body"].read())
+
+        # communicating with endpoints
+    s3 = boto3.resource('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+    session = boto3.Session(region_name='us-west-2', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+    sagemaker_session = sagemaker.Session(boto_session=session)
+    loc_predictor = MXNetPredictor(loc_endpoint, sagemaker_session)
+
+    hw_predictor = JSONPredictor(hw_endpoint, sagemaker_session)
+    hp_predictor = MXNetPredictor(hp_endpoint, sagemaker_session)
+
+    print("Uploading small image..")
+    img_orig = cv2.imread(temp_image_file_name, 0)  # 7948*6198
+    img_for_predictors = cv2.resize(img_orig.copy(), (2479, 3508))  # will be 3508*2479
+
+    tess_scaling_vert = img_orig.shape[0] / img_for_predictors.shape[0]
+    tess_scaling_hor = img_orig.shape[1] / img_for_predictors.shape[1]
+    print("loc to tess scaling", (tess_scaling_vert, tess_scaling_hor))
+
+    # ex: a/b/c.tiff
+    directory_for_image = os.path.split(image_file_name_s3)[0]  # dir  a/b
+    input_image_name_without_ext = os.path.split(image_file_name_s3)[1].split(".")[0]  # c image name
+    image_extension = os.path.split(image_file_name_s3)[1].split(".")[1]  # tiff
+    small_image_name = input_image_name_without_ext + "-small." + image_extension  # c-small.tiff
+    small_image_path_s3 = os.path.join(directory_for_image, input_image_name_without_ext, small_image_name)
+
+    cv2.imwrite(small_image_name, img_for_predictors)
+
+    upload_file(s3, bucket, open(small_image_name, "rb"), small_image_path_s3)  #
+
+    print("Calling localizer..")
+
+    print("sending to localizer:" + small_image_path_s3)
+
+    if is_new_localizer:
+        loc_data = {"url": "s3://{}/{}".format(bucket, small_image_path_s3)}
+    else:
+        loc_data = {'bucket': bucket, 'file_name': small_image_path_s3}
+    # Modify here
+    tb = None
+    try:
+        loc_out = loc_predictor.predict(loc_data)
+
+    except Exception as ex:
+        tb = traceback.format_exc()
+
+    if tb is not None:
+        print("ERROR: {0}".format(tb))
+        response_body = json.dumps({"status": "ERROR", "traceback": tb, "data": data})
+        return response_body, output_content_type
+
+    loc_out = loc_out["result"]
+    # loc_out = loc_predictor.predict(loc_data)
+
+    hw_data = {"bucket": loc_out["bucket_name"], "file_name": loc_out["hw_key"], "model": hw_endpoint_model}
+    hp_data = {"bucket": loc_out["bucket_name"], "file_name": loc_out["hp_key"], "model": hp_endpoint_model}
+
+    img = (255 - copy.copy(img_orig)) / 255
+    img = img[:, :-100]
+
+    print("Parsing the document..")
+    repository = HocrDocument(temp_hocr_file_name)
+    # repository.write_equivalent_xml()
+    pages = repository.parse()
+    pages_h = repository.hierarchical_parse()
+
+    page = pages[list(pages.keys())[0]]
+    page_h = pages_h[list(pages_h.keys())[0]]
+
+    ##########################################################
+    print("Calling Handwriting OCR...")
+
+    try:
+        repository.add_from_deployed(list(pages.keys())[0], hw_data, hw_predictor, is_new_api=hw_endpoint_new_api)
+    except Exception as ex:
+        tb = traceback.format_exc()
+    if tb is not None:
+        print("ERROR: {0}".format(tb))
+        response_body = json.dumps({"status": "ERROR", "traceback": tb, "hw_data": hw_data})
+        return response_body, output_content_type
+    print("Calling Handprinting OCR...")
+    try:
+        repository.add_from_deployed(list(pages.keys())[0], hp_data, hp_predictor, is_new_api=hp_endpoint_new_api)
+    except Exception as ex:
+        tb = traceback.format_exc()
+    if tb is not None:
+        print("ERROR: {0}".format(tb))
+        response_body = json.dumps({"status": "ERROR", "traceback": tb, "hp_data": hw_data})
+        return response_body, output_content_type
+
+    #########################################################
+
+    def clean_files():
+        os.remove(small_image_name)
+        os.remove(temp_hocr_file_name)
+        os.remove(temp_image_file_name)
+
+    hw_thread = threading.Thread(target=clean_files)
+    hw_thread.start()
+
+    # import threading
+    # print("Calling Handwriting OCR...")
+    # hw_thread = threading.Thread(target=lambda: repository.add_from_deployed(list(pages.keys())[0], hw_data, hw_predictor))
+    # hw_thread.start()
     #
-    # # 5 5
-    hocr_file_name = "Page 1--imageinput-sandwich.hocr"  # []
-    image_file_name = "Page 1--magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # iden = 5
+    # print("Calling Handprinting OCR...")
+    # hp_thread = threading.Thread(target=lambda: repository.add_from_deployed(list(pages.keys())[0], hp_data, hp_predictor))
+    # hp_thread.start()
     #
-    # # 3 3
-    hocr_file_name = "Page 1---imageinput-sandwich.hocr"  # perfect
-    image_file_name = "Page 1---magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # # iden = 3
-    # # ======================================================================================
-    # # noisy :)
-    hocr_file_name = "noisy example-imageinput-sandwich.hocr"
-    image_file_name = "noisy example-magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # iden = 0
-    # #
-    hocr_file_name = "noisy example--imageinput-sandwich.hocr"  # [] ....
-    image_file_name = "noisy example--magick.tiff"
-    tests.append((hocr_file_name, image_file_name))
-    # iden = 3
-    #
-    # # ======================================================================================
-    # borderless
-    #tests = []
-    hocr_file_name = "Confirmation of  Coverage - 1-pdfinput-sandwich.hocr"
-    image_file_name = "Confirmation of  Coverage - 1_0.tiff"
-    tests.append((hocr_file_name, image_file_name))
+    # hw_thread.join()
+    # hp_thread.join()
+    #########################################################
 
-    for i in range(0, 14):
-        hocr_file_name = "250091970-pdfinput-sandwich-{}.hocr".format(i)
-        image_file_name = "250091970_{}.tiff".format(i)
-        tests.append((hocr_file_name, image_file_name))
+    page_scaling_hor = img.shape[1] / page['width']  # pages[1] : page text boxes coordinate system dimensions
+    page_scaling_vert = img.shape[0] / page['height']  # pages[1] : page text boxes coordinate system dimensions
+    print("Expected image:" + page["image"], ".......Given:" + image_file_name_s3)
 
-    # tests = []
-    # hocr_file_name = "/home/mohammed-alaa/Downloads/Mock Claims 6-v2-pdfinput-sandwich-3.hocr"
-    # image_file_name = "/home/mohammed-alaa/Downloads/Mock Claims 6-v2_3.tiff"
-    # tests.append((hocr_file_name, image_file_name))
+    print("Text space from(PDF):", (page["height"], page["width"]))
+    print("Image space:", img.shape)
+    df_tabula = None  # If tables with lines, better use tabula
 
-    # hocr_file_name = "/home/mohammed-alaa/Downloads/a226e91b-dd28-4ce4-a1fb-be1508bcc917$4.hocr"
-    # image_file_name = "/home/mohammed-alaa/Downloads/a226e91b-dd28-4ce4-a1fb-be1508bcc917$4.tiff"
-    # tests.append((hocr_file_name, image_file_name))
+    if (df_tabula == None):
+        verbose = False
+        # 3508x2379 ~ 90linesx25words ~ pixels/word = 96, pixels/line=40--> strip_height > 40 (*2 for header usually > 2 lines) (100) w_max_pool < 96 (50)
+        tables_detector = TableDetector(verbose, strip_height=50, w_max_pool=75, min_col_width=250, ratio_clip_max=0.25)
+        print("Detecting Tables..")
+        tables = tables_detector.detect_tables(img)
+        # tables_detector.visualize_tables(img_orig)
+        print("Fitting Text..")
+        tables_detector.fit_bordered_tables()  # <<< pdf coordinates are compared to image coordinates (scaling needed)
+        tables_detector.layout_based_borderless_detection()
+        response_body = tables_detector.get_json_response()
+    else:
+        df_res = df_tabula
+        list_of_json_tables = [json.loads(df_res.to_json())]
+        response_body = json.dumps({"data": list_of_json_tables})
 
-    iden = 0
-
-    # # ======================================================================================
-    #
-    # communicating with endpoints
-
-    for i, (hocr_file_name, image_file_name) in enumerate(tests):
-        print(i, hocr_file_name, image_file_name)
-        s3 = boto3.resource('s3', aws_access_key_id='', aws_secret_access_key='')
-        session = boto3.Session(region_name='us-west-2', aws_access_key_id='', aws_secret_access_key='')
-        sagemaker_session = sagemaker.Session(boto_session=session)
-        loc_predictor = MXNetPredictor('sagemaker-mxnet-2018-11-07-23-13-24-501', sagemaker_session)
-
-        hw_predictor = JSONPredictor('pytorch-handwriting-ocr-2018-11-21-20-10-49-542', sagemaker_session)
-        hp_predictor = MXNetPredictor('sagemaker-mxnet-2018-11-03-23-32-01-918', sagemaker_session)
-
-        print("Uploading small image..")
-        img_orig = cv2.imread(image_file_name, 0)  # 7948*6198
-        img_for_predictors = cv2.resize(img_orig.copy(), (2479, 3508))  # will be 3508*2479
-
-        tess_scaling_vert = img_orig.shape[0] / img_for_predictors.shape[0]
-        tess_scaling_hor = img_orig.shape[1] / img_for_predictors.shape[1]
-        print("loc  to tess scaling", (tess_scaling_vert, tess_scaling_hor))
-
-        remote_dir_for_output = os.path.split(image_file_name)[1].split(".")[0]
-        image_extension = os.path.split(image_file_name)[1].split(".")[1]
-        small_image_name = remote_dir_for_output + "-small." + image_extension
-        cv2.imwrite(small_image_name, img_for_predictors)
-
-        # upload_file(s3, bucket, open(small_image_name, "rb"), os.path.join(remote_dir_for_output, small_image_name))
-
-        img = (255 - copy.copy(img_orig)) / 255
-        img = img[:, :-100].astype(np.float32)
-
-        print("Parsing the document..")
-        repository = HocrDocument(hocr_file_name)
-        # repository.write_equivalent_xml()
-        pages = repository.parse()
-        pages_h = repository.hierarchical_parse()
-
-        page = pages[list(pages.keys())[0]]
-        page_h = pages_h[list(pages_h.keys())[0]]
-
-        page_scaling_hor = img.shape[1] / page['width']  # pages[1] : page text boxes coordinate system dimensions
-        page_scaling_vert = img.shape[0] / page['height']  # pages[1] : page text boxes coordinate system dimensions
-        print("Expected image:" + page["image"], ".......Given:" + image_file_name)
-        ####################################################################################################################################################
-        global img_orig_sentences, img_orig_words, img_orig_rand, img_orig_borderless
-        line_width = int(round(img_orig.shape[0] / 1000))
-        img_orig_sentences = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_words = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_rand = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_hp_hw = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_words_sent = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_words_lines = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_hier = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_borderless = cv2.cvtColor(img_orig.copy(), cv2.COLOR_GRAY2RGB)
-        img_orig_words_sent[:] = 0
-
-        for sent in page["sentences"]:
-            cv2.rectangle(img_orig_sentences, (int(sent["left"]), int(sent["top"])), (int(sent["right"]), int(sent["bottom"])), (255, 0, 0), line_width)
-
-        for i, line in enumerate(page["lines"]):
-            clr = (np.random.randint(0, 255), np.random.randint(0, 255), np.random.randint(0, 255))
-            for sent in line:
-                cv2.rectangle(img_orig_words_lines, (int(sent["left"]), int(sent["top"])), (int(sent["right"]), int(sent["bottom"])), clr, line_width)
-
-        for sent in page["words"]:
-            left_i, right_i, top_i, bottom_i = int(sent["left"]), int(sent["right"]), int(sent["top"]), int(sent["bottom"])
-
-            if sent["type"] != "tesser":  # from deployed models    and words["confidence"] > .6
-                if sent["type"] == "HP":
-                    cv2.rectangle(img_orig_hp_hw, (left_i, top_i), (right_i, bottom_i), (0, 255, 255), line_width * 2)
-                    cv2.rectangle(img_orig_words, (left_i, top_i), (right_i, bottom_i), (0, 255, 255), line_width * 2)
-                else:
-                    cv2.rectangle(img_orig_hp_hw, (left_i, top_i), (right_i, bottom_i), (255, 0, 255), line_width * 2)
-                    cv2.rectangle(img_orig_words, (left_i, top_i), (right_i, bottom_i), (255, 0, 255), line_width * 2)
-
-            else:
-                cv2.rectangle(img_orig_words, (left_i, top_i), (right_i, bottom_i), (255, 255, 0), 8)
-                cv2.rectangle(img_orig_words_sent, (left_i, top_i), (right_i, bottom_i), (255, 255, 0), 3)
-                cv2.putText(img_orig_words_sent, sent["value"], (left_i + 20, bottom_i - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 255), 2)
-            cv2.rectangle(img_orig_rand, (left_i, top_i), (right_i, bottom_i), (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)), line_width)
-
-        for hor in page["hor_lines"]:
-            left_i, right_i, top_i, bottom_i = int(hor["left"]), int(hor["right"]), int(hor["top"]), int(hor["bottom"])
-            cv2.rectangle(img_orig_words, (left_i, top_i), (right_i, bottom_i), (0, 0, 255), line_width)
-            cv2.rectangle(img_orig_rand, (left_i, top_i), (right_i, bottom_i), (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)), line_width)
-
-        for vert in page["vert_lines"]:
-            left_i, right_i, top_i, bottom_i = int(vert["left"]), int(vert["right"]), int(vert["top"]), int(vert["bottom"])
-            cv2.rectangle(img_orig_words, (left_i, top_i), (right_i, bottom_i), (0, 255, 0), line_width)
-            cv2.rectangle(img_orig_rand, (left_i, top_i), (right_i, bottom_i), (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)), line_width)
-
-        pages_h = repository.hierarchical_parse()
-        page_h = pages_h[list(pages_h.keys())[0]]
-
-        tree_hor = IntervalTree()
-        tree_ver = IntervalTree()
-        for i, sent in enumerate(page["sentences"]):
-            tree_hor[sent["left"]:sent["right"]] = i
-            tree_ver[sent["top"]:sent["bottom"]] = i
-
-        for block in page_h["blocks"].values():
-            x1, y1, x2, y2 = block["bbox"]
-            cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (0, 0, 255), 10)
-
-            for par in block["paragraphs"].values():
-                for line in par["lines"].values():
-                    # x1, y1, x2, y2 = line["bbox"]
-                    # cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (0, 0, 255), 10)
-
-                    for word in line["words"].values():
-                        x1, y1, x2, y2 = word["bbox"]
-                        cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (255, 255, 0), 5)
-
-                    # for word in line["non words"].values():
-                    #     x1, y1, x2, y2 = word["bbox"]
-                    #     cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (255, 0, 255), 5)
-                    #
-                    # for word in line["verticals"].values():
-                    #     x1, y1, x2, y2 = word["bbox"]
-                    #     cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (0, 255, 255), 5)
-                    #
-                    # for word in line["horizontals"].values():
-                    #     x1, y1, x2, y2 = word["bbox"]
-                    #     cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (128, 255, 128), 5)
-                    #
-                    # for word in line["sentences"].values():
-                    #     x1, y1, x2, y2 = word["bbox"]
-                    #     cv2.rectangle(img_orig_hier, (x1, y1), (x2, y2), (64, 32, 255), 5)
-
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_words{}.jpg".format(iden), img_orig_words)
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_rand{}.jpg".format(iden), img_orig_rand)
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_lines{}.jpg".format(iden), img_orig_sentences)
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_hp_hw{}.jpg".format(iden), img_orig_hp_hw)
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_words_sent{}.jpg".format(iden), img_orig_words_sent)
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_words_lines{}.jpg".format(iden), img_orig_words_lines)
-        cv2.imwrite("/home/mohammed-alaa/Desktop/ims/img_orig_hier{}.jpg".format(iden), img_orig_hier)
-        ####################################################################################################################################################
-
-        print("Text space from(PDF):", (page["height"], page["width"]))
-        print("Image space:", img.shape)
-        df_tabula = None  # If tables with lines, better use tabula
-
-        if (df_tabula == None):
-            verbose = False
-            # 3508x2379 ~ 90linesx25words ~ pixels/word = 96, pixels/line=40--> strip_height > 40 (*2 for header usually > 2 lines) (100) w_max_pool < 96 (50)
-            tables_detector = TableDetector(verbose, strip_height=50, w_max_pool=75, min_col_width=250, ratio_clip_max=0.25)
-            print("Detecting Tables..")
-
-            print("Fitting Text..")
-            # tables = tables_detector.detect_tables(cv2.resize(img, (2479, 3508)))
-            # tables_detector.visualize_tables(cv2.resize(img_orig, (2479, 3508)))
-
-            tables = tables_detector.detect_tables(img)
-            # tables_detector.visualize_tables()
-            tables_detector.fit_bordered_tables()
-
-            tables_detector.layout_based_borderless_detection()
-
-            response_body = tables_detector.get_json_response()
-        else:
-            df_res = df_tabula
-            list_of_json_tables = [json.loads(df_res.to_json())]
-            response_body = json.dumps({"data": list_of_json_tables})
-
-        print(json.dumps(json.loads(response_body), sort_keys=True, indent=4))
-        print("=" * 100)
-
-
-transform_fn(None, None, None, None)
+    print(os.popen("df . -m").read())
+    return response_body, output_content_type

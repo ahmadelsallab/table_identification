@@ -25,9 +25,9 @@ params_parser = argparse.ArgumentParser(description='Searchable PDF script')
 
 params_parser.register('type', 'bool', lambda v: v.lower() in ('yes', 'true', 't', '1', 'y'))
 params_parser.add_argument('source')
-params_parser.add_argument('--is_complex', type='bool', default=True, dest="complex processing by magick")
-params_parser.add_argument('--specific_page', type=int, default=-1, dest="select a page or it loops on the entire document(better if you select- it's zero based)")
-params_parser.add_argument('--compress_images', type='bool', default=True, dest="lossy compression of the image by opencv(preferred)")
+params_parser.add_argument('--is_complex', type='bool', default=True, help="complex processing by magick")
+params_parser.add_argument('--specific_page', type=int, default=-1, help="select a page or it loops on the entire document(better if you select- it's zero based)")
+params_parser.add_argument('--compress_images', type='bool', default=True, help="lossy compression of the image by opencv(preferred)")
 
 params = params_parser.parse_args()
 
